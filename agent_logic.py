@@ -28,34 +28,60 @@ async def run_aurora_automation(rep_id, customer_name):
             await page.locator(f"text='{customer_name}'").first.click()
             
             # --- 2. CLICK NEW DESIGN ---
-            print("LOG: Opening New Design...")
-            # Look for the + New Design button
-            new_design_btn = page.get_by_role("button", name="New design")
-            await new_design_btn.wait_for(state="visible")
-            await new_design_btn.click()
-            
-            # CRITICAL: Wait for the 3D Engine to load. 
-            # This is the "Coming right up..." screen in your video.
-            print("LOG: Waiting for 3D Engine (20s)...")
-            await asyncio.sleep(20) 
+             print("LOG: Opening New Design...")
+        new_design_btn = page.get_by_role("button", name="New design")
+        await new_design_btn.wait_for(state="visible")
+        await new_design_btn.click()
+        
+        # CRITICAL: Close the 'Restore pages' pop-up if it exists
+        try:
+            print("LOG: Checking for Chromium restore pop-up...")
+            await page.get_by_role("button", name="Restore").click(timeout=5000)
+        except:
+            print("LOG: No restore pop-up found, continuing.")
 
-            # --- 3. RUN AI SMARTROOF ---
-            print("LOG: Triggering AI SmartRoof...")
-            # Click the 'Roof' icon in the left sidebar
-            await page.get_by_label("Roof").click()
-            await page.get_by_text("AI SmartRoof").first.click()
+        # Wait for the 3D Engine to load completely
+        print("LOG: Waiting for 3D Engine to be ready...")
+        await asyncio.sleep(20) 
+
+        # --- 3. RUN AI SMARTROOF ---
+        print("LOG: Attempting to open Roof menu...")
+        try:
+            # In your screenshot, 'Roof' is a clear menu item. 
+            # We use a combined selector to ensure we hit the right one.
+            roof_menu = page.locator("div").get_by_text("Roof", exact=True).first
+            await roof_menu.wait_for(state="visible", timeout=20000)
             
-            # The yellow progress bar starts. We wait for the 'Complete' toast.
-            print("LOG: AI is modeling the roof. This takes ~60 seconds...")
-            # We wait for the "AI SmartRoof complete" message to appear at the bottom
+            # Visual Debug: Highlight the Roof button
+            await roof_menu.evaluate("el => el.style.border = '3px solid red'")
+            await roof_menu.click()
+            print("LOG: Roof menu clicked.")
+            
+            await asyncio.sleep(2)
+            
+            # Now click AI SmartRoof
+            print("LOG: Clicking AI SmartRoof...")
+            ai_smartroof_btn = page.get_by_text("AI SmartRoof").first
+            await ai_smartroof_btn.click()
+            
+            # Wait for the progress bar
+            print("LOG: AI modeling in progress...")
+            # We look for the "Running AI SmartRoof" status at the bottom
             await page.wait_for_selector("text=AI SmartRoof complete", timeout=120000)
-            print("LOG: Roof modeling finished.")
+            print("LOG: AI SmartRoof modeling successful.")
 
-            # --- 4. RUN AUTODESIGNER (Panels) ---
-            print("LOG: Triggering AutoDesigner...")
-            # Click the 'System' icon (usually below Roof)
-            await page.get_by_label("System").click()
-            await page.get_by_text("AutoDesigner").click()
+        except Exception as e:
+            print(f"LOG: Failed to interact with Roof menu. Error: {e}")
+            await page.screenshot(path="cad_error.png")
+
+        # --- 4. RUN AUTODESIGNER ---
+        print("LOG: Navigating to System menu...")
+        # Clicking 'System' tab at the top of the menu box
+        await page.get_by_text("System", exact=True).click()
+        await asyncio.sleep(2)
+        
+        await page.get_by_text("AutoDesigner").click()
+        await page.get_by_role("button", name="Run AutoDesigner").click()
             
             # Highlight the 'Run AutoDesigner' button
             run_btn = page.get_by_role("button", name="Run AutoDesigner")
