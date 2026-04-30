@@ -8,7 +8,7 @@ load_dotenv()
 async def run_aurora_automation(rep_id, customer_name):
     async with async_playwright() as p:
         # Each rep gets their own folder to save cookies
-        profile_path = f"/home/ubuntu/samedays-agent/profiles/{rep_id}"
+        profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
         
         context = await p.chromium.launch_persistent_context(
             user_data_dir=profile_path,
