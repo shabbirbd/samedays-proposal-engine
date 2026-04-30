@@ -3,125 +3,144 @@ import os
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 
+# Load credentials from .env file
 load_dotenv()
 
 async def run_aurora_automation(rep_id, customer_name):
     print(f"LOG: Starting design workflow for {customer_name}")
+    
     async with async_playwright() as p:
+        # Define the path where cookies are stored for this rep
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
         
+        # Launch browser connected to the virtual display :99
         context = await p.chromium.launch_persistent_context(
             user_data_dir=profile_path,
             headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--display=:99", "--window-size=1280,1024"]
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--display=:99", 
+                "--window-size=1280,1024"
+            ]
         )
         page = await context.new_page()
 
         try:
-            # --- 1. SEARCH & OPEN CUSTOMER (Already working) ---
+            # --- STEP 1: SEARCH & OPEN CUSTOMER ---
+            print(f"LOG: Navigating to Projects page...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded")
             await asyncio.sleep(5)
+
+            print(f"LOG: Searching for '{customer_name}'...")
             search_input = page.locator("input[placeholder*='Search']").first
             await search_input.fill(customer_name)
             await page.keyboard.press("Enter")
             await asyncio.sleep(4)
-            await page.locator(f"text='{customer_name}'").first.click()
-            
-            # --- 2. CLICK NEW DESIGN ---
-             print("LOG: Opening New Design...")
-        new_design_btn = page.get_by_role("button", name="New design")
-        await new_design_btn.wait_for(state="visible")
-        await new_design_btn.click()
-        
-        # CRITICAL: Close the 'Restore pages' pop-up if it exists
-        try:
-            print("LOG: Checking for Chromium restore pop-up...")
-            await page.get_by_role("button", name="Restore").click(timeout=5000)
-        except:
-            print("LOG: No restore pop-up found, continuing.")
 
-        # Wait for the 3D Engine to load completely
-        print("LOG: Waiting for 3D Engine to be ready...")
-        await asyncio.sleep(20) 
+            print(f"LOG: Clicking customer result...")
+            await page.get_by_text(customer_name, exact=False).first.click()
+            
+            # --- STEP 2: HANDLE DESIGN CREATION ---
+            print("LOG: Clicking New Design button...")
+            new_design_btn = page.get_by_role("button", name="New design")
+            await new_design_btn.wait_for(state="visible")
+            await new_design_btn.click()
+            
+            # --- STEP 3: HANDLE BROWSER POP-UPS ---
+            # This handles the "Chromium didn't shut down correctly" blue button
+            try:
+                print("LOG: Checking for 'Restore pages' pop-up...")
+                restore_btn = page.get_by_role("button", name="Restore")
+                if await restore_btn.is_visible():
+                    await restore_btn.click(timeout=5000)
+                    print("LOG: Restore pop-up dismissed.")
+            except:
+                print("LOG: No restore pop-up detected.")
 
-        # --- 3. RUN AI SMARTROOF ---
-        print("LOG: Attempting to open Roof menu...")
-        try:
-            # In your screenshot, 'Roof' is a clear menu item. 
-            # We use a combined selector to ensure we hit the right one.
-            roof_menu = page.locator("div").get_by_text("Roof", exact=True).first
-            await roof_menu.wait_for(state="visible", timeout=20000)
-            
-            # Visual Debug: Highlight the Roof button
-            await roof_menu.evaluate("el => el.style.border = '3px solid red'")
-            await roof_menu.click()
-            print("LOG: Roof menu clicked.")
-            
+            # Wait for the 3D Engine to load completely
+            print("LOG: Waiting 20 seconds for 3D Engine to load...")
+            await asyncio.sleep(20) 
+
+            # --- STEP 4: RUN AI SMARTROOF ---
+            print("LOG: Attempting to open Roof menu...")
+            try:
+                # Target the 'Roof' menu in the sidebar
+                roof_menu = page.locator("div").get_by_text("Roof", exact=True).first
+                await roof_menu.wait_for(state="visible", timeout=20000)
+                
+                # Visual Highlight for VNC debugging
+                await roof_menu.evaluate("el => el.style.border = '3px solid red'")
+                await roof_menu.click()
+                print("LOG: Roof menu opened.")
+                
+                await asyncio.sleep(2)
+                
+                print("LOG: Clicking AI SmartRoof...")
+                await page.get_by_text("AI SmartRoof").first.click()
+                
+                # Wait for progress bar (Yellow bar in your video)
+                print("LOG: AI is modeling the roof. Waiting for completion...")
+                await page.wait_for_selector("text=AI SmartRoof complete", timeout=120000)
+                print("LOG: AI SmartRoof successful.")
+            except Exception as e:
+                print(f"LOG: Error in AI SmartRoof step: {e}")
+
+            # --- STEP 5: RUN AUTODESIGNER (PANELS) ---
+            print("LOG: Navigating to System menu...")
+            await page.get_by_text("System", exact=True).click()
             await asyncio.sleep(2)
             
-            # Now click AI SmartRoof
-            print("LOG: Clicking AI SmartRoof...")
-            ai_smartroof_btn = page.get_by_text("AI SmartRoof").first
-            await ai_smartroof_btn.click()
+            await page.get_by_text("AutoDesigner").click()
             
-            # Wait for the progress bar
-            print("LOG: AI modeling in progress...")
-            # We look for the "Running AI SmartRoof" status at the bottom
-            await page.wait_for_selector("text=AI SmartRoof complete", timeout=120000)
-            print("LOG: AI SmartRoof modeling successful.")
-
-        except Exception as e:
-            print(f"LOG: Failed to interact with Roof menu. Error: {e}")
-            await page.screenshot(path="cad_error.png")
-
-        # --- 4. RUN AUTODESIGNER ---
-        print("LOG: Navigating to System menu...")
-        # Clicking 'System' tab at the top of the menu box
-        await page.get_by_text("System", exact=True).click()
-        await asyncio.sleep(2)
-        
-        await page.get_by_text("AutoDesigner").click()
-        await page.get_by_role("button", name="Run AutoDesigner").click()
-            
-            # Highlight the 'Run AutoDesigner' button
+            print("LOG: Running AutoDesigner...")
             run_btn = page.get_by_role("button", name="Run AutoDesigner")
-            await run_btn.evaluate("el => el.style.border = '4px solid green'")
             await run_btn.click()
 
-            # --- 5. HANDLE INVERTER ERROR (Video @ 0:50) ---
+            # --- STEP 6: HANDLE INVERTER ERROR (Video @ 0:50) ---
             print("LOG: Checking for Inverter Error...")
-            await asyncio.sleep(6) # Wait for the error toast to potentially appear
+            await asyncio.sleep(6) 
             
-            error_exists = await page.get_by_text("Inverter is required").is_visible()
-            if error_exists:
-                print("LOG: ERROR FOUND: Inverter required. Fixing...")
+            error_msg = page.get_by_text("Inverter is required")
+            if await error_msg.is_visible():
+                print("LOG: Detected Inverter Error. Applying fix...")
                 await page.get_by_text("Components").click()
                 await page.get_by_text("Select Inverter").click()
-                # Select the first option (Tesla or Enphase)
+                
+                # Keyboard navigation to pick the first inverter
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
-                # Run AutoDesigner again
+                
+                # Run AutoDesigner again after fix
+                print("LOG: Re-running AutoDesigner...")
                 await page.get_by_role("button", name="Run AutoDesigner").click()
                 await page.wait_for_selector("text=AutoDesigner completed", timeout=60000)
 
-            # --- 6. GENERATE PROPOSAL LINK ---
-            print("LOG: Design done. Entering Sales Mode...")
+            # --- STEP 7: GENERATE FINAL PROPOSAL LINK ---
+            print("LOG: Entering Sales Mode...")
             await page.get_by_text("Sales mode").click()
             
-            # Wait for the proposal to load
-            await asyncio.sleep(10)
+            # Give the proposal page 12 seconds to load and generate the URL
+            await asyncio.sleep(12)
             
-            final_proposal_url = page.url
-            print(f"LOG: SUCCESS! Final URL: {final_proposal_url}")
+            final_url = page.url
+            print(f"LOG: SUCCESS! Final Proposal URL: {final_url}")
             
-            # Send this URL back to your main app (or just return it)
-            return final_proposal_url
+            return final_url
 
         except Exception as e:
-            print(f"!!! WORKFLOW ERROR: {e}")
-            await page.screenshot(path="workflow_error.png")
+            print(f"!!! CRITICAL WORKFLOW ERROR: {e}")
+            # Save a screenshot for debugging
+            await page.screenshot(path="workflow_crash.png")
+            return f"ERROR: {str(e)}"
 
-        # Keep open for review
-        print("LOG: Keeping browser open for 5 minutes.")
-        await asyncio.sleep(300)
-        return "SUCCESS"
+        finally:
+            # We keep the browser open for 5 minutes so you can see the result in VNC
+            # In a production environment, you would remove this sleep.
+            print("LOG: Keeping browser open for 5 minutes for RealVNC inspection.")
+            await asyncio.sleep(300)
+            await context.close()
+
+# If running this file directly for testing
+if __name__ == "__main__":
+    asyncio.run(run_aurora_automation("rep_1", "Test Testcase"))
