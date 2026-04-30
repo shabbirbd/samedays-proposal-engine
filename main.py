@@ -14,10 +14,11 @@ async def trigger(data: dict, background_tasks: BackgroundTasks):
 
 async def start_agent(rep_id, customer):
     try:
+        print(f"\n--- STARTING JOB FOR {customer} ---")
         result = await run_aurora_automation(rep_id, customer)
-        print(f"AGENT RESULT: {result}")
+        print(f"--- JOB FINISHED: {result} ---\n")
     except Exception as e:
-        print(f"SYSTEM ERROR: {e}")
+        print(f"!!! SYSTEM ERROR: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
