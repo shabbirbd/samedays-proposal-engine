@@ -11,72 +11,64 @@ load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
-    print(f"LOG: Starting OpenClaw Agent for {customer_name}")
+    print(f"LOG: Starting Full OpenClaw Agent for {customer_name}")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
         
+        # Launch browser on virtual display :99
         context = await p.chromium.launch_persistent_context(
             user_data_dir=profile_path,
             headless=False,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--display=:99", "--window-size=1280,1024"]
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--display=:99", 
+                "--window-size=1280,1024"
+            ]
         )
         page = await context.new_page()
 
         try:
-            # 1. High-Speed Navigation (Playwright)
-            print("LOG: Navigating to projects...")
-            await page.goto("https://v2.aurorasolar.com/projects", timeout=60000)
-            await asyncio.sleep(5)
-
-            # Handle Login if necessary
-            if "login" in page.url:
-                await page.get_by_label("Email").fill(os.getenv("AURORA_EMAIL"))
-                await page.get_by_label("Password").fill(os.getenv("AURORA_PASSWORD"))
-                await page.get_by_role("button", name="Log in").click()
-                await page.wait_for_url("**/projects", timeout=60000)
-
-            # Search & Open
-            search_input = page.locator("input[placeholder*='Search']").first
-            await search_input.fill(customer_name)
-            await page.keyboard.press("Enter")
-            await asyncio.sleep(5)
-            await page.get_by_text(customer_name, exact=False).first.click()
-            await asyncio.sleep(5)
+            # Step 1: Open the browser to the starting point
+            print("LOG: Opening Aurora...")
+            await page.goto("https://v2.aurorasolar.com/projects")
             
-            # Click New Design
-            await page.get_by_role("button", name="New design").click()
-            print("LOG: CAD Engine loading. Handing over to Claude (OpenClaw Mode)...")
-            await asyncio.sleep(25) 
-
-            # 2. OpenClaw Mode (Claude Computer Use)
-            # We give Claude a loop to look at the screen and click
+            # THE COMPUTER USE LOOP
+            # We give Claude a list of objectives. He decides which tool to use.
             
             system_prompt = f"""
-            You are controlling a web browser to complete a solar design in Aurora.
-            Your current task is: 
-            1. Click the 'Roof' menu in the sidebar.
-            2. Click 'AI SmartRoof'. 
-            3. Wait for the 'AI SmartRoof complete' message (yellow bar).
-            4. Click the 'System' tab, then 'AutoDesigner', then 'Run AutoDesigner'.
-            5. If you see a red 'Inverter is required' error, click 'Components', pick an inverter, and Run AutoDesigner again.
-            6. When finished, click 'Sales mode' to generate the proposal.
+            You are a solar design expert using a computer. 
+            The screen resolution is 1280x1024.
             
-            Important: Only use the 'computer' tool. The screen resolution is 1280x1024.
+            Your ultimate goal: Create a Sales Mode proposal for the customer: {customer_name}
+            
+            Follow these steps visually:
+            1. LOGIN: If you see a login screen, type the email '{os.getenv("AURORA_EMAIL")}' and password '{os.getenv("AURORA_PASSWORD")}'. If MFA appears, type 'WAITING FOR MFA' in the logs and wait.
+            2. SEARCH: Locate the search bar on the projects page. Type '{customer_name}' and press Enter.
+            3. OPEN: Click on the customer '{customer_name}' when it appears in the list.
+            4. DESIGN: Click the '+ New Design' button. 
+            5. CAD LOAD: If a 'Coming right up' or loading screen appears, wait for the 3D map to show.
+            6. ROOF: Click the 'Roof' icon in the sidebar, then click 'AI SmartRoof'. Wait for it to finish.
+            7. SYSTEM: Click the 'System' tab, then 'AutoDesigner', then 'Run AutoDesigner'.
+            8. ERROR FIX: If a red error says 'Inverter required', click 'Components', pick any inverter, and run AutoDesigner again.
+            9. FINISH: Click 'Sales Mode' in the top right.
+            
+            Once you see a URL containing 'e-proposal', you have succeeded.
             """
 
-            messages = [{"role": "user", "content": "Start the design process now."}]
-
-            # Run for 15 turns or until success
-            for i in range(15):
-                # Take screenshot for Claude
-                screenshot_path = f"claudes_view.png"
+            messages = []
+            
+            # We allow up to 30 "thoughts" (steps) to complete the whole job
+            for iteration in range(30):
+                # 1. Take Screenshot
+                screenshot_path = f"agent_view.png"
                 await page.screenshot(path=screenshot_path)
                 
                 with open(screenshot_path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode("utf-8")
 
-                # Call Claude Computer Use
+                # 2. Ask Claude what to do
                 response = client.beta.messages.create(
                     model="claude-3-5-sonnet-20241022",
                     max_tokens=1024,
@@ -84,23 +76,28 @@ async def run_aurora_automation(rep_id, customer_name):
                     messages=messages + [{
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": f"Iteration {i}: What is your next move?"},
+                            {"type": "text", "text": f"Current URL: {page.url}. What is your next move to reach the goal?"},
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}}
                         ]
                     }],
                     betas=["computer-use-2024-10-22"]
                 )
 
-                # Process Claude's decision
+                # Add Claude's thought to the history
+                messages.append({"role": "user", "content": f"Step {iteration} analysis requested."})
+                
+                # 3. Execute Claude's tool calls
                 for content in response.content:
+                    if content.type == "text":
+                        print(f"CLAUDE THOUGHT: {content.text}")
+                    
                     if content.type == "tool_use" and content.name == "computer":
                         action = content.input["action"]
                         coords = content.input.get("coordinate")
                         text = content.input.get("text")
 
-                        print(f"CLAUDE ACTION: {action} at {coords}")
-                        
-                        # Execute Claude's action via Playwright
+                        print(f"ACTION: {action} | Coords: {coords} | Text: {text}")
+
                         if action == "mouse_move":
                             await page.mouse.move(coords[0], coords[1])
                         elif action == "left_click":
@@ -109,19 +106,22 @@ async def run_aurora_automation(rep_id, customer_name):
                             await page.keyboard.type(text)
                         elif action == "key":
                             await page.keyboard.press(text)
+                        elif action == "wait":
+                            await asyncio.sleep(5)
 
-                if "Sales mode" in page.url or "e-proposal" in page.url:
-                    print("LOG: Claude successfully reached Sales Mode!")
-                    break
+                # 4. Check if we reached the goal
+                if "e-proposal" in page.url:
+                    print(f"LOG: SUCCESS! Goal reached at {page.url}")
+                    return page.url
                 
-                await asyncio.sleep(5) # Give the UI time to react
+                await asyncio.sleep(2) # Breathing room between steps
 
-            return page.url
+            return "FAILED: Max iterations reached."
 
         except Exception as e:
             print(f"!!! AGENT ERROR: {e}")
             return f"ERROR: {e}"
         finally:
-            print("LOG: Process complete. Keeping VNC alive for 5 mins.")
+            print("LOG: Cleaning up. Keeping VNC open for 5 mins.")
             await asyncio.sleep(300)
             await context.close()
