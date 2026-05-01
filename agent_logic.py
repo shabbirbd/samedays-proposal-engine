@@ -70,7 +70,7 @@ async def run_aurora_automation(rep_id, customer_name):
 
                 # 2. Ask Claude what to do
                 response = client.beta.messages.create(
-                    model="claude-3-5-sonnet-20241022",
+                    model="claude-3-5-sonnet-latest",
                     max_tokens=1024,
                     system=system_prompt,
                     messages=messages + [{
