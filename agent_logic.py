@@ -12,6 +12,15 @@ load_dotenv(os.path.join(script_dir, ".env"))
 # Initialize Anthropic Client
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+# Debug: Check model access
+try:
+    models = client.models.list()
+    print("LOG: Your API Key has access to these models:")
+    for m in models.data:
+        print(f" - {m.id}")
+except Exception as e:
+    print(f"LOG: Could not list models: {e}")
+
 async def run_aurora_automation(rep_id, customer_name):
     # CRITICAL: Force the script to use the Virtual Display
     os.environ["DISPLAY"] = ":99"
@@ -85,7 +94,7 @@ async def run_aurora_automation(rep_id, customer_name):
 
                 # Call Claude Computer Use
                 response = client.beta.messages.create(
-                    model="claude-3-5-sonnet-latest",
+                    model="claude-3-5-sonnet-20241022",
                     max_tokens=1024,
                     system=system_prompt,
                     messages=messages + [{
