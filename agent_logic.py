@@ -17,105 +17,108 @@ async def run_aurora_automation(rep_id, customer_name):
                 "--no-sandbox", 
                 "--disable-setuid-sandbox", 
                 "--display=:99", 
-                "--window-size=1280,1024",
-                "--start-maximized"
+                "--window-size=1280,1024"
             ]
         )
         page = await context.new_page()
 
         try:
-            # --- 1. NAVIGATION & PROJECT OPENING ---
-            await page.goto("https://v2.aurorasolar.com/projects", wait_until="networkidle")
-            await asyncio.sleep(5)
+            # --- 1. ROBUST NAVIGATION ---
+            print(f"LOG: Navigating to projects (60s timeout)...")
+            # Changed 'networkidle' to 'domcontentloaded' to avoid timeouts
+            await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
             
-            # Dismiss any 'Restore' or 'Crash' popups immediately
+            # Wait for the search bar to confirm we are actually 'in'
+            print("LOG: Waiting for search bar to appear...")
+            search_input = page.locator("input[placeholder*='Search']").first
+            await search_input.wait_for(state="visible", timeout=30000)
+
+            # Dismiss popups
             try:
                 await page.locator("button:has-text('Restore')").click(timeout=3000)
                 print("LOG: Dismissed Chromium restore popup.")
             except: pass
 
-            search_input = page.locator("input[placeholder*='Search']").first
+            # --- 2. SEARCH & OPEN ---
+            print(f"LOG: Searching for '{customer_name}'...")
+            await search_input.click()
             await search_input.fill(customer_name)
             await page.keyboard.press("Enter")
             await asyncio.sleep(5)
             
-            # Click the customer project link
             await page.locator(f"text='{customer_name}'").first.click()
             await asyncio.sleep(5)
 
-            # --- 2. OPEN NEW DESIGN ---
+            # --- 3. OPEN NEW DESIGN ---
             print("LOG: Clicking New Design...")
-            await page.get_by_role("button", name="New design").click()
+            # Using force=True because sometimes overlays block the button
+            await page.get_by_role("button", name="New design").click(force=True)
             
-            # Wait for CAD Engine (The 'Coming right up' screen)
-            print("LOG: Waiting for 3D CAD Engine (35 seconds)...")
-            await asyncio.sleep(35) 
+            print("LOG: Waiting 40 seconds for CAD Engine...")
+            await asyncio.sleep(40) 
 
-            # --- 3. THE SIDEBAR STICKY-CLICK LOGIC ---
-            # Aurora menus can be 'finicky'. We use a loop to ensure 'Roof' opens.
-            
+            # --- 4. THE SIDEBAR CLICK LOOP ---
             print("LOG: Attempting to trigger AI SmartRoof...")
             
-            # Step A: Ensure we are on the 'Site' tab
-            await page.locator("div[role='tab']").get_by_text("Site").click(force=True)
-            await asyncio.sleep(2)
+            # Ensure 'Site' tab is active
+            await page.get_by_text("Site", exact=True).click(force=True)
+            await asyncio.sleep(3)
 
-            # Step B: Click 'Roof' and verify if 'AI SmartRoof' appears
             for attempt in range(3):
                 print(f"LOG: Opening Roof Menu (Attempt {attempt+1})...")
-                # We target the chevron/arrow next to Roof if text click fails
+                # Target the Roof list item
                 await page.locator("li").filter(has_text="Roof").click(force=True)
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
                 
+                # Check if sub-menu is visible
                 ai_button = page.get_by_text("AI SmartRoof")
                 if await ai_button.is_visible():
-                    print("LOG: AI SmartRoof visible! Clicking...")
+                    print("LOG: AI SmartRoof button found! Clicking...")
                     await ai_button.click(force=True)
                     break
                 else:
-                    print("LOG: Menu didn't open, retrying...")
-                    # Click somewhere else to 'reset' the menu
-                    await page.mouse.click(10, 10) 
+                    print("LOG: Sub-menu didn't open, retrying...")
+                    # Click elsewhere to refresh focus
+                    await page.mouse.click(500, 10) 
+                    await asyncio.sleep(2)
             
-            # --- 4. WAIT FOR AI TO MODEL ---
-            print("LOG: AI Modeling in progress. Waiting for 'complete' status...")
-            # This is the yellow progress bar in your video
+            # --- 5. WAIT FOR MODELING ---
+            print("LOG: Waiting for 'AI SmartRoof complete' status...")
             await page.wait_for_selector("text=AI SmartRoof complete", timeout=120000)
-            print("LOG: AI SmartRoof Finished.")
+            print("LOG: AI Modeling finished.")
 
-            # --- 5. RUN AUTODESIGNER (PANELS) ---
-            print("LOG: Switching to System tab...")
-            await page.locator("div[role='tab']").get_by_text("System").click(force=True)
+            # --- 6. SYSTEM -> AUTODESIGNER ---
+            print("LOG: Navigating to System menu...")
+            await page.get_by_text("System", exact=True).click(force=True)
             await asyncio.sleep(3)
             
-            print("LOG: Triggering AutoDesigner...")
             await page.get_by_text("AutoDesigner").click(force=True)
             await asyncio.sleep(2)
             await page.get_by_role("button", name="Run AutoDesigner").click(force=True)
 
-            # --- 6. HANDLE INVERTER ERROR ---
-            print("LOG: Checking for Inverter errors...")
+            # --- 7. HANDLE INVERTER ERROR ---
+            print("LOG: Monitoring for Inverter Error...")
             await asyncio.sleep(10)
             
             if await page.get_by_text("Inverter is required").is_visible():
-                print("LOG: Inverter Error found. Fixing...")
-                await page.locator("div[role='tab']").get_by_text("Site").click(force=True)
+                print("LOG: Fixing Inverter Error...")
+                await page.get_by_text("Site", exact=True).click(force=True)
                 await page.get_by_text("Components").click(force=True)
                 await page.get_by_text("Select Inverter").click(force=True)
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 
-                await page.locator("div[role='tab']").get_by_text("System").click(force=True)
+                await page.get_by_text("System", exact=True).click(force=True)
                 await page.get_by_text("AutoDesigner").click(force=True)
                 await page.get_by_role("button", name="Run AutoDesigner").click(force=True)
                 await page.wait_for_selector("text=AutoDesigner completed", timeout=60000)
 
-            # --- 7. SALES MODE ---
+            # --- 8. FINISH & SALES MODE ---
             print("LOG: Entering Sales Mode...")
             await page.get_by_text("Sales mode").click(force=True)
             
-            await asyncio.sleep(15)
+            await asyncio.sleep(20) # Extra time for proposal to generate
             final_url = page.url
             print(f"LOG: SUCCESS! Final URL: {final_url}")
             
