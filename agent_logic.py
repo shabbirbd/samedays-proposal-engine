@@ -35,14 +35,14 @@ async def run_aurora_automation(rep_id, customer_name):
         page = await context.new_page()
 
         try:
-            # --- PHASE 1: LOGIN & SEARCH (Code-based for speed/cost) ---
+            # --- PHASE 1: LOGIN & SEARCH (Code-based) ---
             print("LOG: Navigating to Aurora Projects...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
 
-            # Handle Login if necessary
+            # Handle Login
             if "login" in page.url:
-                print("LOG: Login page detected. Entering credentials via code...")
+                print("LOG: Login page detected. Entering credentials...")
                 await page.get_by_label("Email").fill(os.getenv("AURORA_EMAIL"))
                 await page.get_by_label("Password").fill(os.getenv("AURORA_PASSWORD"))
                 await page.get_by_role("button", name="Log in").click()
@@ -69,11 +69,10 @@ async def run_aurora_automation(rep_id, customer_name):
             print("LOG: Clicking New Design button...")
             await page.get_by_role("button", name="New design").click()
             
-            # Wait for the CAD Engine "Coming right up" screen to pass
             print("LOG: Waiting 30s for CAD Engine. Handing over to Claude...")
             await asyncio.sleep(30) 
 
-            # --- PHASE 2: THE 3D DESIGN (Vision-based for intelligence) ---
+            # --- PHASE 2: THE 3D DESIGN (Vision-based) ---
             system_prompt = f"""
             You are a solar design expert controlling a computer. 
             Resolution: 1280x1024.
@@ -92,17 +91,15 @@ async def run_aurora_automation(rep_id, customer_name):
             messages = []
             
             for iteration in range(25):
-                print(f"LOG: Claude Iteration {iteration} - Analyzing 3D Canvas...")
+                print(f"LOG: Claude Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
-                # Take screenshot for Claude
                 screenshot_path = f"agent_view.png"
                 await page.screenshot(path=screenshot_path, animations="disabled")
 
                 with open(screenshot_path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode("utf-8")
 
-                # Call Claude Sonnet 4.6
                 response = client.beta.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=1024,
@@ -119,7 +116,6 @@ async def run_aurora_automation(rep_id, customer_name):
 
                 messages.append({"role": "user", "content": f"Step {iteration} analysis requested."})
                 
-                # Execute Claude's visual actions
                 for content in response.content:
                     if content.type == "text":
                         print(f"CLAUDE THOUGHT: {content.text}")
@@ -140,7 +136,6 @@ async def run_aurora_automation(rep_id, customer_name):
                         elif action == "key":
                             await page.keyboard.press(text)
 
-                # Check if we transitioned to the proposal link
                 if "e-proposal" in page.url:
                     print(f"LOG: SUCCESS! Final Link: {page.url}")
                     return page.url
@@ -151,7 +146,6 @@ async def run_aurora_automation(rep_id, customer_name):
 
         except Exception as e:
             print(f"!!! AGENT ERROR: {e}")
-            await page.screenshot(path="final_crash_error.png")
             return f"ERROR: {e}"
         finally:
             print("LOG: Process complete. Keeping VNC alive for 5 mins.")
@@ -159,4 +153,4 @@ async def run_aurora_automation(rep_id, customer_name):
             await context.close()
 
 if __name__ == "__main__":
-    as
+    asyncio.run(run_aurora_automation("rep_1", "Test Testcase"))
