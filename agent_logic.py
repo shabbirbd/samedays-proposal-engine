@@ -14,7 +14,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
     os.environ["DISPLAY"] = ":99"
-    print(f"LOG: Starting Hybrid Agent for {customer_name} (Full Workflow Mode)")
+    print(f"LOG: Starting GL_ Hardware Workflow for {customer_name}")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
@@ -30,7 +30,7 @@ async def run_aurora_automation(rep_id, customer_name):
         page = await context.new_page()
 
         try:
-            # --- PHASE 1: LOGIN & NAVIGATE (Playwright - Fast/Free) ---
+            # --- PHASE 1: LOGIN & NAVIGATE ---
             print("LOG: Navigating to Aurora...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
@@ -53,14 +53,14 @@ async def run_aurora_automation(rep_id, customer_name):
             await page.get_by_text(customer_name, exact=False).first.click()
             await asyncio.sleep(5)
             
-            print("LOG: Clicking New Design...")
+            print("LOG: Clicking New Design button...")
             await page.get_by_role("button", name="New design").click()
             
             # --- PHASE 2: CAD PREPARATION ---
             print("LOG: Waiting for CAD Engine (40s)...")
             await asyncio.sleep(40) 
 
-            # Dismiss "Restore" popup if it's blocking the view
+            # Dismiss popups
             try:
                 await page.get_by_role("button", name="Restore").click(timeout=3000)
             except: pass
@@ -68,48 +68,43 @@ async def run_aurora_automation(rep_id, customer_name):
             # --- PHASE 3: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
             You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Complete AutoDesign, Add Battery, Set Finance for {customer_name}.
+            Goal: Complete AutoDesign with GL_ hardware, Skip Battery, and Set Financing for {customer_name}.
             
             WORKFLOW DIRECTIONS (Follow in strict order):
             1. ROOF: Click 'Roof' -> 'AI SmartRoof'. Wait for the yellow bar at bottom to disappear.
-            2. AUTODESIGN: Click the 'System' tab in left sidebar -> 'AutoDesigner'.
-            3. INVERTER: In the RIGHT panel, select an inverter dropdown, pick first option, then click black 'Run AutoDesigner' button.
-            
-            --- AFTER PANELS ARE PLACED, MOVE TO THESE STEPS ---
-            
-            4. BATTERY: Click the 'Battery' icon in the TOP CENTER.
-               - In the RIGHT panel, select a Battery and an Inverter.
-               - Click the black 'Simulate' button. Wait for it to finish.
+            2. SYSTEM: Click the 'System' tab in the left sidebar -> 'AutoDesigner'.
+            3. HARDWARE SELECTION (In the RIGHT panel):
+               - Click 'Select solar panels'. Pick a panel that starts with 'GL_'.
+               - Click 'Select microinverters'. Pick a microinverter that starts with 'GL_'.
+               - Click the black 'Run AutoDesigner' button at the bottom of that panel.
+            4. SKIP BATTERY: Do NOT click the battery icon. Go directly to Finance.
             5. FINANCE: Click the 'Dollar Sign' icon in the TOP CENTER.
                - Click the 'Adjust financing' button.
-               - Change 'Cash' to 'GoodLeap'.
-               - Select 'GoodLeap PPA Solar + EnergyShift Battery'.
-               - Click 'Next' -> Select a Solar Rate -> Click 'Save'.
-            6. FINISH: Click 'Sales mode' in the top right to finish.
+               - Change 'Cash' to 'GoodLeap' in the first dropdown.
+               - ACTION: WAIT(5) to allow product dropdown to load.
+               - Select 'GoodLeap PPA Solar + EnergyShift Battery' (or the relevant PPA option).
+               - Select 'Standard Pricing' -> Click 'Next'.
+               - Select a Solar Rate from the list (e.g., $0.15) and click 'Save'.
+            6. FINISH: Click 'Sales mode' in the top right. Success is a URL with 'e-proposal'.
             
             COMMAND FORMAT:
-            Respond with one action at a time:
+            Respond with exactly one action:
             ACTION: CLICK(x, y)
             ACTION: TYPE("text")
             ACTION: WAIT(5)
-            
-            If panels are already on the roof, skip to step 4 (Battery).
             """
 
             messages = []
             
-            # Increased to 50 iterations to allow for battery and finance steps
             for iteration in range(50):
                 print(f"LOG: Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
-                # Capture Screen
                 screenshot_path = "agent_view.png"
                 await page.screenshot(path=screenshot_path, animations="disabled")
                 with open(screenshot_path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode("utf-8")
 
-                # Request Action from Claude 4.6
                 response = client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=800,
@@ -118,7 +113,7 @@ async def run_aurora_automation(rep_id, customer_name):
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION in the sequence?"}
+                            {"type": "text", "text": f"Current URL: {page.url}. What is the next action? Remember to use GL_ hardware."}
                         ]
                     }]
                 )
@@ -146,7 +141,7 @@ async def run_aurora_automation(rep_id, customer_name):
                     await asyncio.sleep(sec)
 
                 if "e-proposal" in page.url:
-                    print(f"LOG: SUCCESS! Goal reached: {page.url}")
+                    print(f"LOG: SUCCESS! Final URL: {page.url}")
                     return page.url
 
             return "FAILED: Max iterations"
