@@ -14,7 +14,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
     os.environ["DISPLAY"] = ":99"
-    print(f"LOG: Starting Hybrid Agent for {customer_name} (Inverter Fix Mode)")
+    print(f"LOG: Starting Hybrid Agent for {customer_name} (Full Workflow Mode)")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
@@ -68,30 +68,38 @@ async def run_aurora_automation(rep_id, customer_name):
             # --- PHASE 3: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
             You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Complete the AutoDesign for {customer_name}.
+            Goal: Complete AutoDesign, Add Battery, Set Finance for {customer_name}.
             
-            WORKFLOW DIRECTIONS:
+            WORKFLOW DIRECTIONS (Follow in strict order):
             1. ROOF: Click 'Roof' -> 'AI SmartRoof'. Wait for the yellow bar at bottom to disappear.
-            2. SYSTEM: Click the 'System' tab in the left sidebar.
-            3. AUTODESIGNER: Click 'AutoDesigner' in the menu. This opens a panel on the RIGHT side.
-            4. INVERTER: In the RIGHT panel, look for 'Select string inverters' or 'Select microinverters'. 
-               - Click that dropdown.
-               - Click the first inverter option that appears.
-            5. RUN: Click the black 'Run AutoDesigner' button at the bottom right of the sidebar.
+            2. AUTODESIGN: Click the 'System' tab in left sidebar -> 'AutoDesigner'.
+            3. INVERTER: In the RIGHT panel, select an inverter dropdown, pick first option, then click black 'Run AutoDesigner' button.
+            
+            --- AFTER PANELS ARE PLACED, MOVE TO THESE STEPS ---
+            
+            4. BATTERY: Click the 'Battery' icon in the TOP CENTER.
+               - In the RIGHT panel, select a Battery and an Inverter.
+               - Click the black 'Simulate' button. Wait for it to finish.
+            5. FINANCE: Click the 'Dollar Sign' icon in the TOP CENTER.
+               - Click the 'Adjust financing' button.
+               - Change 'Cash' to 'GoodLeap'.
+               - Select 'GoodLeap PPA Solar + EnergyShift Battery'.
+               - Click 'Next' -> Select a Solar Rate -> Click 'Save'.
             6. FINISH: Click 'Sales mode' in the top right to finish.
             
             COMMAND FORMAT:
-            You MUST respond with one action at a time in this format:
+            Respond with one action at a time:
             ACTION: CLICK(x, y)
             ACTION: TYPE("text")
             ACTION: WAIT(5)
             
-            If you click and nothing happens, try clicking 10 pixels to the right or left.
+            If panels are already on the roof, skip to step 4 (Battery).
             """
 
             messages = []
             
-            for iteration in range(25):
+            # Increased to 50 iterations to allow for battery and finance steps
+            for iteration in range(50):
                 print(f"LOG: Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
@@ -104,13 +112,13 @@ async def run_aurora_automation(rep_id, customer_name):
                 # Request Action from Claude 4.6
                 response = client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=600,
+                    max_tokens=800,
                     system=system_prompt,
                     messages=messages + [{
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"URL: {page.url}. What is the next ACTION to select the inverter and run the design?"}
+                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION in the sequence?"}
                         ]
                     }]
                 )
