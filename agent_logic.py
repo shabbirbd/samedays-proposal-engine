@@ -24,7 +24,7 @@ async def run_aurora_automation(rep_id, customer_name):
             args=["--no-sandbox", "--disable-setuid-sandbox", "--display=:99", "--window-size=1280,1024"]
         )
         page = await context.new_page()
-
+ 
         try:
             # --- PHASE 1: LOGIN & NAVIGATE ---
             print("LOG: Navigating to Aurora...")
