@@ -14,7 +14,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
     os.environ["DISPLAY"] = ":99"
-    print(f"LOG: Starting Full Workflow Agent for {customer_name}")
+    print(f"LOG: Starting Hybrid Agent for {customer_name} (Inverter Fix Mode)")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
@@ -30,7 +30,7 @@ async def run_aurora_automation(rep_id, customer_name):
         page = await context.new_page()
 
         try:
-            # --- PHASE 1: LOGIN & NAVIGATE ---
+            # --- PHASE 1: LOGIN & NAVIGATE (Playwright - Fast/Free) ---
             print("LOG: Navigating to Aurora...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
@@ -53,62 +53,64 @@ async def run_aurora_automation(rep_id, customer_name):
             await page.get_by_text(customer_name, exact=False).first.click()
             await asyncio.sleep(5)
             
-            # ALWAYS create a NEW design
-            print("LOG: Clicking New Design button...")
+            print("LOG: Clicking New Design...")
             await page.get_by_role("button", name="New design").click()
             
+            # --- PHASE 2: CAD PREPARATION ---
             print("LOG: Waiting for CAD Engine (40s)...")
             await asyncio.sleep(40) 
 
-            # Dismiss popups
+            # Dismiss "Restore" popup if it's blocking the view
             try:
                 await page.get_by_role("button", name="Restore").click(timeout=3000)
             except: pass
 
-            # --- PHASE 2: THE FULL VISION LOOP (Claude Sonnet 4.6) ---
+            # --- PHASE 3: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
             You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Complete design, add battery, set financing for {customer_name}.
+            Goal: Complete the AutoDesign for {customer_name}.
             
-            SEQUENTIAL STEPS:
-            1. ROOF: Click 'Roof' -> 'AI SmartRoof'. Wait for the yellow bar to finish.
-            2. AUTO-DESIGN: Click 'System' -> 'AutoDesigner'.
-            3. INVERTER: In the RIGHT panel, select an inverter if required, then click black 'Run AutoDesigner' button.
-            4. BATTERY: Click the 'Battery' icon in the TOP CENTER.
-               - Select a Battery and Inverter in the right panel.
-               - Click 'Simulate'. Wait for results.
-            5. FINANCE: Click the 'Dollar/Price' icon in the TOP CENTER.
-               - Click 'Adjust financing'.
-               - Select 'GoodLeap' from the dropdown.
-               - Select 'GoodLeap PPA Solar + EnergyShift Battery'.
-               - Click 'Next' and 'Save' after picking a rate.
-            6. FINISH: Click 'Sales mode' in the top right.
+            WORKFLOW DIRECTIONS:
+            1. ROOF: Click 'Roof' -> 'AI SmartRoof'. Wait for the yellow bar at bottom to disappear.
+            2. SYSTEM: Click the 'System' tab in the left sidebar.
+            3. AUTODESIGNER: Click 'AutoDesigner' in the menu. This opens a panel on the RIGHT side.
+            4. INVERTER: In the RIGHT panel, look for 'Select string inverters' or 'Select microinverters'. 
+               - Click that dropdown.
+               - Click the first inverter option that appears.
+            5. RUN: Click the black 'Run AutoDesigner' button at the bottom right of the sidebar.
+            6. FINISH: Click 'Sales mode' in the top right to finish.
             
             COMMAND FORMAT:
-            You MUST respond with exactly: ACTION: CLICK(x, y) or ACTION: TYPE("text") or ACTION: WAIT(5)
+            You MUST respond with one action at a time in this format:
+            ACTION: CLICK(x, y)
+            ACTION: TYPE("text")
+            ACTION: WAIT(5)
+            
+            If you click and nothing happens, try clicking 10 pixels to the right or left.
             """
 
             messages = []
             
-            # Increased to 50 iterations for the full sequence
-            for iteration in range(50):
+            for iteration in range(25):
                 print(f"LOG: Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
+                # Capture Screen
                 screenshot_path = "agent_view.png"
                 await page.screenshot(path=screenshot_path, animations="disabled")
                 with open(screenshot_path, "rb") as f:
                     base64_image = base64.b64encode(f.read()).decode("utf-8")
 
+                # Request Action from Claude 4.6
                 response = client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=800,
+                    max_tokens=600,
                     system=system_prompt,
                     messages=messages + [{
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"Next step to complete the workflow?"}
+                            {"type": "text", "text": f"URL: {page.url}. What is the next ACTION to select the inverter and run the design?"}
                         ]
                     }]
                 )
@@ -143,6 +145,7 @@ async def run_aurora_automation(rep_id, customer_name):
 
         except Exception as e:
             print(f"!!! AGENT ERROR: {e}")
+            await page.screenshot(path="final_crash.png")
             return f"ERROR: {e}"
         finally:
             print("LOG: Process finished. VNC remains open for 5 mins.")
