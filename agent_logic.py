@@ -14,7 +14,7 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
     os.environ["DISPLAY"] = ":99"
-    print(f"LOG: Starting Optimized Workflow for {customer_name}")
+    print(f"LOG: Starting Final Stabilized Workflow for {customer_name}")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
@@ -23,13 +23,8 @@ async def run_aurora_automation(rep_id, customer_name):
             user_data_dir=profile_path,
             headless=False,
             args=[
-                "--no-sandbox", 
-                "--disable-setuid-sandbox", 
-                "--display=:99", 
-                "--window-size=1280,1024",
-                "--disable-dev-shm-usage",
-                "--disable-infobars",
-                "--disable-session-crashed-bubble", # Try to disable the restore bubble at startup
+                "--no-sandbox", "--disable-setuid-sandbox", "--display=:99", 
+                "--window-size=1280,1024", "--disable-dev-shm-usage"
             ]
         )
         page = await context.new_page()
@@ -38,69 +33,48 @@ async def run_aurora_automation(rep_id, customer_name):
             # --- PHASE 1: LOGIN & NAVIGATE ---
             print("LOG: Navigating to Aurora...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
-            
-            # --- POPUP NUKE: Remove the Restore Bubble immediately ---
-            await asyncio.sleep(3)
-            try:
-                # Target the 'X' or the 'Restore' button if it exists
-                restore_close = page.locator("button[aria-label='Close'], .infobar-close, button:has-text('Restore')").first
-                if await restore_close.is_visible():
-                    print("LOG: Dismissing Chrome Restore popup...")
-                    await restore_close.click()
-            except: pass
+            await asyncio.sleep(5)
 
             if "login" in page.url:
                 await page.get_by_label("Email").fill(os.getenv("AURORA_EMAIL"))
                 await page.get_by_label("Password").fill(os.getenv("AURORA_PASSWORD"))
                 await page.get_by_role("button", name="Log in").click()
-                print("LOG: [ACTION] Handle MFA in VNC if prompted.")
                 await page.wait_for_url("**/projects", timeout=120000)
             
-            print(f"LOG: Searching for '{customer_name}'...")
             search = page.locator("input[placeholder*='Search']").first
             await search.fill(customer_name)
             await page.keyboard.press("Enter")
             await asyncio.sleep(5)
-
-            print(f"LOG: Opening project...")
             await page.get_by_text(customer_name, exact=False).first.click()
             await asyncio.sleep(5)
             
             print("LOG: Creating NEW design...")
             await page.get_by_role("button", name="New design").click()
-            
-            # CAD preparation wait
             await asyncio.sleep(40) 
 
             # --- PHASE 2: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
             You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Create a proposal for {customer_name}. 
+            Goal: Proposal for {customer_name}.
             
-            CRITICAL RULES TO PREVENT LOOPING:
-            1. If you see panels already placed on the roof, STEP 1 and 2 are DONE. 
-            2. If 'AutoDesigner completed' is visible, IMMEDIATELY move to the Finance (Dollar) icon.
-            3. NEVER click 'Run AutoDesigner' more than once per design.
-            4. Skip the Battery icon entirely.
+            IMPORTANT: If you see a blue 'Restore pages?' bubble at the top right, click the 'X' on it immediately. It blocks the UI.
 
-            STEP-BY-STEP CHECKLIST:
-            1. ROOF: Click 'Roof' (left sidebar) -> 'AI SmartRoof'. Wait for the yellow bar to finish.
-            2. HARDWARE: Click 'System' (left sidebar) -> 'AutoDesigner'.
-               - Click 'Select solar panels'. Choose the option starting with 'GL_'.
-               - Click 'Select microinverters'. Choose the option starting with 'GL_'.
-               - Click the black 'Run AutoDesigner' button.
-            3. FINANCE: Once panels are visible, click the 'Dollar Sign' icon in the TOP CENTER.
+            STRICT SEQUENCE:
+            1. ROOF: Left sidebar 'Roof' -> 'AI SmartRoof'. Wait for the yellow status to disappear.
+            2. DESIGN: Left sidebar 'System' -> 'AutoDesigner'.
+               - Select 'GL_' panels and 'GL_' microinverters in the right panel.
+               - Click black 'Run AutoDesigner' button.
+            3. LOOP PREVENTION: If you see panels on the roof, do NOT click AutoDesigner again. MOVE TO FINANCE.
+            4. FINANCE: Click the 'Dollar Sign' icon (TOP CENTER).
                - Click 'Adjust financing'.
-               - First Dropdown: Select 'GoodLeap'.
-               - ACTION: WAIT(5) - You MUST wait 5 seconds for the products to load.
-               - Second Dropdown: Select 'GoodLeap PPA Solar + EnergyShift Battery'.
-               - Click 'Next' -> Select a Solar Rate -> Click 'Save'.
-            4. FINISH: Click 'Sales mode' in the top right.
+               - Select 'GoodLeap' in the first dropdown.
+               - WAIT for products to load.
+               - Select 'GoodLeap Lease Solar only 2.99% ESC' (or similar PPA/Lease option from the list).
+               - Select 'Standard Pricing' -> Click 'Next'.
+               - Select a Solar Rate and click 'Save'.
+            5. FINISH: Click 'Sales mode' in the top right.
             
-            COMMAND FORMAT:
-            ACTION: CLICK(x, y)
-            ACTION: TYPE("text")
-            ACTION: WAIT(5)
+            FORMAT: ACTION: CLICK(x, y) or ACTION: TYPE("text") or ACTION: WAIT(5)
             """
 
             messages = []
@@ -121,7 +95,7 @@ async def run_aurora_automation(rep_id, customer_name):
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"Current URL: {page.url}. If panels are on the roof, click the Dollar icon now."}
+                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION? If the Restore popup is there, close it first."}
                         ]
                     }]
                 )
@@ -149,7 +123,7 @@ async def run_aurora_automation(rep_id, customer_name):
                     await asyncio.sleep(sec)
 
                 if "e-proposal" in page.url:
-                    print(f"LOG: SUCCESS! URL: {page.url}")
+                    print(f"LOG: SUCCESS! Final URL: {page.url}")
                     return page.url
 
             return "FAILED: Max iterations"
@@ -158,7 +132,7 @@ async def run_aurora_automation(rep_id, customer_name):
             print(f"!!! AGENT ERROR: {e}")
             return f"ERROR: {e}"
         finally:
-            print("LOG: Final VNC review. Closing in 5 mins.")
+            print("LOG: Task ended. VNC alive for review.")
             await asyncio.sleep(300)
             await context.close()
 
