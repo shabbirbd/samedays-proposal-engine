@@ -55,21 +55,24 @@ async def run_aurora_automation(rep_id, customer_name):
             # --- PHASE 2: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
             You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Proposal for {customer_name}.
+            Goal: Complete the full proposal workflow for {customer_name}.
             
-            IMPORTANT: If you see a blue 'Restore pages?' bubble at the top right, click the 'X' on it immediately. It blocks the UI.
+            IMPORTANT - POPUP MANAGEMENT:
+            1. If you see a blue 'Restore pages?' bubble, click the 'X' to close it.
+            2. If you see a 'GoodLeap TPO Program Updates' popup, click the 'X' or the 'Close/Done' button immediately. It blocks the finance selection.
 
-            STRICT SEQUENCE:
+            STRICT WORKFLOW:
             1. ROOF: Left sidebar 'Roof' -> 'AI SmartRoof'. Wait for the yellow status to disappear.
             2. DESIGN: Left sidebar 'System' -> 'AutoDesigner'.
-               - Select 'GL_' panels and 'GL_' microinverters in the right panel.
+               - Select 'GL_' hardware in the right panel.
                - Click black 'Run AutoDesigner' button.
-            3. LOOP PREVENTION: If you see panels on the roof, do NOT click AutoDesigner again. MOVE TO FINANCE.
+            3. LOOP PREVENTION: If panels are visible, do NOT click AutoDesigner. MOVE TO FINANCE.
             4. FINANCE: Click the 'Dollar Sign' icon (TOP CENTER).
                - Click 'Adjust financing'.
                - Select 'GoodLeap' in the first dropdown.
-               - WAIT for products to load.
-               - Select 'GoodLeap Lease Solar only 2.99% ESC' (or similar PPA/Lease option from the list).
+               - IF A POPUP APPEARS (TPO Updates), CLOSE IT IMMEDIATELY.
+               - WAIT for 'GoodLeap' products to load in the second dropdown.
+               - Select 'GoodLeap Lease Solar only 2.99% ESC'.
                - Select 'Standard Pricing' -> Click 'Next'.
                - Select a Solar Rate and click 'Save'.
             5. FINISH: Click 'Sales mode' in the top right.
@@ -78,7 +81,8 @@ async def run_aurora_automation(rep_id, customer_name):
             """
 
             messages = []
-            for iteration in range(50):
+            # INCREASED TO 75 iterations to handle extra popups and complex finance steps
+            for iteration in range(75):
                 print(f"LOG: Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
@@ -89,13 +93,13 @@ async def run_aurora_automation(rep_id, customer_name):
 
                 response = client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=800,
+                    max_tokens=1000, # Increased for more detailed reasoning
                     system=system_prompt,
                     messages=messages + [{
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION? If the Restore popup is there, close it first."}
+                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION? Close any blocking popups first."}
                         ]
                     }]
                 )
@@ -126,13 +130,13 @@ async def run_aurora_automation(rep_id, customer_name):
                     print(f"LOG: SUCCESS! Final URL: {page.url}")
                     return page.url
 
-            return "FAILED: Max iterations"
+            return "FAILED: Max iterations reached"
 
         except Exception as e:
             print(f"!!! AGENT ERROR: {e}")
             return f"ERROR: {e}"
         finally:
-            print("LOG: Task ended. VNC alive for review.")
+            print("LOG: Process complete. VNC remains open for 5 mins.")
             await asyncio.sleep(300)
             await context.close()
 
