@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-# Force load the .env file
+# Load credentials
 script_dir = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(script_dir, ".env"))
 
@@ -14,11 +14,10 @@ client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 async def run_aurora_automation(rep_id, customer_name):
     os.environ["DISPLAY"] = ":99"
-    print(f"LOG: Starting Final Stabilized Workflow for {customer_name}")
+    print(f"LOG: Starting High-Precision Agent for {customer_name}")
     
     async with async_playwright() as p:
         profile_path = f"/home/ubuntu/samedays-proposal-engine/profiles/{rep_id}"
-        
         context = await p.chromium.launch_persistent_context(
             user_data_dir=profile_path,
             headless=False,
@@ -30,7 +29,7 @@ async def run_aurora_automation(rep_id, customer_name):
         page = await context.new_page()
 
         try:
-            # --- PHASE 1: LOGIN & NAVIGATE ---
+            # --- PHASE 1: LOGIN & NAVIGATE (Playwright) ---
             print("LOG: Navigating to Aurora...")
             await page.goto("https://v2.aurorasolar.com/projects", wait_until="domcontentloaded", timeout=60000)
             await asyncio.sleep(5)
@@ -48,41 +47,40 @@ async def run_aurora_automation(rep_id, customer_name):
             await page.get_by_text(customer_name, exact=False).first.click()
             await asyncio.sleep(5)
             
-            print("LOG: Creating NEW design...")
+            print("LOG: Clicking New Design button...")
             await page.get_by_role("button", name="New design").click()
             await asyncio.sleep(40) 
 
+            # Dismiss "Restore" popup if present
+            try:
+                await page.get_by_role("button", name="Restore").click(timeout=3000)
+            except: pass
+
             # --- PHASE 2: THE VISION LOOP (Claude Sonnet 4.6) ---
             system_prompt = f"""
-            You are a solar design expert. Screen resolution: 1280x1024.
-            Goal: Complete the full proposal workflow for {customer_name}.
-            
-            IMPORTANT - POPUP MANAGEMENT:
-            1. If you see a blue 'Restore pages?' bubble, click the 'X' to close it.
-            2. If you see a 'GoodLeap TPO Program Updates' popup, click the 'X' or the 'Close/Done' button immediately. It blocks the finance selection.
+            You are a solar design expert. Resolution: 1280x1024.
+            Goal: Proposal for {customer_name}. 
 
-            STRICT WORKFLOW:
-            1. ROOF: Left sidebar 'Roof' -> 'AI SmartRoof'. Wait for the yellow status to disappear.
-            2. DESIGN: Left sidebar 'System' -> 'AutoDesigner'.
-               - Select 'GL_' hardware in the right panel.
-               - Click black 'Run AutoDesigner' button.
-            3. LOOP PREVENTION: If panels are visible, do NOT click AutoDesigner. MOVE TO FINANCE.
-            4. FINANCE: Click the 'Dollar Sign' icon (TOP CENTER).
-               - Click 'Adjust financing'.
-               - Select 'GoodLeap' in the first dropdown.
-               - IF A POPUP APPEARS (TPO Updates), CLOSE IT IMMEDIATELY.
-               - WAIT for 'GoodLeap' products to load in the second dropdown.
-               - Select 'GoodLeap Lease Solar only 2.99% ESC'.
-               - Select 'Standard Pricing' -> Click 'Next'.
-               - Select a Solar Rate and click 'Save'.
-            5. FINISH: Click 'Sales mode' in the top right.
-            
-            FORMAT: ACTION: CLICK(x, y) or ACTION: TYPE("text") or ACTION: WAIT(5)
+            PRECISION RULES:
+            1. TOASTS: Look at the BOTTOM CENTER of the screen for notifications (e.g. 'AI SmartRoof complete' or 'AutoDesigner completed'). Do NOT proceed to the next phase until the toast confirms the current one is done.
+            2. SCROLLING: The right-hand sidebar for AutoDesigner is long. If you cannot see 'Microinverters', you MUST scroll down. Use ACTION: SCROLL(500).
+            3. HARDWARE: 
+               - Select Panels starting with 'GL_'.
+               - Select Microinverters starting with 'GL_'.
+            4. FINANCE: Once panels are on the roof and toast confirms completion, click the Dollar icon (Top Center).
+               - Select 'GoodLeap' -> WAIT(5) -> Select 'GoodLeap Lease Solar only 2.99% ESC'.
+               - Finish with 'Save' and 'Sales mode'.
+
+            COMMAND FORMAT:
+            Respond with one action:
+            ACTION: CLICK(x, y)
+            ACTION: TYPE("text")
+            ACTION: WAIT(5)
+            ACTION: SCROLL(500)  <-- Use this to see microinverters in the sidebar
             """
 
             messages = []
-            # INCREASED TO 75 iterations to handle extra popups and complex finance steps
-            for iteration in range(75):
+            for iteration in range(60):
                 print(f"LOG: Iteration {iteration}")
                 await asyncio.sleep(2) 
                 
@@ -93,13 +91,13 @@ async def run_aurora_automation(rep_id, customer_name):
 
                 response = client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=1000, # Increased for more detailed reasoning
+                    max_tokens=800,
                     system=system_prompt,
                     messages=messages + [{
                         "role": "user",
                         "content": [
                             {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64_image}},
-                            {"type": "text", "text": f"Current URL: {page.url}. What is the next ACTION? Close any blocking popups first."}
+                            {"type": "text", "text": f"Current URL: {page.url}. What is the next action? Check bottom center for toasts."}
                         ]
                     }]
                 )
@@ -112,6 +110,7 @@ async def run_aurora_automation(rep_id, customer_name):
                 click_match = re.search(r"ACTION: CLICK\((\d+),\s*(\d+)\)", thought)
                 type_match = re.search(r'ACTION: TYPE\("([^"]+)"\)', thought)
                 wait_match = re.search(r"ACTION: WAIT\((\d+)\)", thought)
+                scroll_match = re.search(r"ACTION: SCROLL\((\d+)\)", thought)
 
                 if click_match:
                     x, y = int(click_match.group(1)), int(click_match.group(2))
@@ -125,18 +124,24 @@ async def run_aurora_automation(rep_id, customer_name):
                     sec = int(wait_match.group(1))
                     print(f"EXECUTING: Wait {sec}s")
                     await asyncio.sleep(sec)
+                elif scroll_match:
+                    amount = int(scroll_match.group(1))
+                    print(f"EXECUTING: Scroll sidebar by {amount}")
+                    # Move mouse to the sidebar area first then scroll
+                    await page.mouse.move(1100, 500) 
+                    await page.mouse.wheel(0, amount)
 
                 if "e-proposal" in page.url:
                     print(f"LOG: SUCCESS! Final URL: {page.url}")
                     return page.url
 
-            return "FAILED: Max iterations reached"
+            return "FAILED: Max iterations"
 
         except Exception as e:
             print(f"!!! AGENT ERROR: {e}")
             return f"ERROR: {e}"
         finally:
-            print("LOG: Process complete. VNC remains open for 5 mins.")
+            print("LOG: Process complete. VNC remains open for review.")
             await asyncio.sleep(300)
             await context.close()
 
