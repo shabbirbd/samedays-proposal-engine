@@ -137,7 +137,7 @@ async def run_aurora_automation(rep_id, customer_name):
 
             return "FAILED: Max iterations"
 
-        except Exception as e:
+        except Exception as e: 
             print(f"!!! AGENT ERROR: {e}")
             return f"ERROR: {e}"
         finally:
